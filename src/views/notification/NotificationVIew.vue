@@ -74,8 +74,9 @@ import {
   markNotificationRead,
   deleteNotification
 } from '@/api/notification'
+import { getCurrentUserId } from '@/utils/auth'
 
-const CURRENT_USER_ID = 1
+const userId = getCurrentUserId()
 
 /**
  * 注入来自 MainLayout 的 fetchUnread 函数。
@@ -129,9 +130,10 @@ const formatTime = (str) => {
 
 // 加载通知
 const fetchList = async () => {
+  if (!userId) return
   loading.value = true
   try {
-    const data = await getNotificationsByUser(CURRENT_USER_ID)
+    const data = await getNotificationsByUser(userId)
     // 倒序（最新的在最前）
     list.value = [...data].sort((a, b) =>
       new Date(b.sendTime) - new Date(a.sendTime)

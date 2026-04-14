@@ -16,7 +16,7 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-        <button class="add-btn" @click="router.push('/rooms/create')">新增自习室</button>
+        <button class="add-btn" @click="openAddDialog">新增自习室</button>
       </div>
     </div>
 
@@ -39,6 +39,8 @@
         v-for="room in filteredRooms"
         :key="room.roomId"
         class="room-item"
+        @click="openDetailDialog(room)"
+        style="cursor: pointer;"
       >
         <!-- 左侧信息 -->
         <div class="room-info">
@@ -60,12 +62,95 @@
         <button
           class="select-btn"
           :disabled="room.status !== 'open'"
-          @click="enterRoom(room.roomId)"
+          @click.stop="enterRoom(room.roomId)"
         >
           选择
         </button>
       </div>
     </div>
+
+    <!-- 新增自习室弹窗 -->
+    <el-dialog v-model="addDialogVisible" title="新增自习室" width="400px" destroy-on-close :close-on-click-modal="false">
+      <el-form ref="addFormRef" :model="addForm" :rules="rules" label-position="top">
+        <el-form-item label="自习室名称" prop="roomName">
+          <el-input v-model="addForm.roomName" placeholder="请输入自习室名称" clearable />
+        </el-form-item>
+        <el-form-item label="位置" prop="location">
+          <el-input v-model="addForm.location" placeholder="请输入位置" clearable />
+        </el-form-item>
+        <el-form-item label="容量" prop="capacity">
+          <el-input-number v-model="addForm.capacity" :min="1" :step="1" placeholder="请输入容量" class="w-full" />
+        </el-form-item>
+        <el-form-item label="状态" prop="status">
+          <el-select v-model="addForm.status" placeholder="请选择状态" class="w-full">
+            <el-option label="开放中" value="open" />
+            <el-option label="已关闭" value="closed" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="addDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="saving" @click="submitAdd">确定</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 详情 / 编辑弹窗 -->
+    <el-dialog v-model="detailDialogVisible" title="自习室详情" width="450px" destroy-on-close :close-on-click-modal="false">
+      <div v-if="detailLoading" class="state-wrap">
+        <el-icon class="is-loading" :size="28"><Loading /></el-icon>
+      </div>
+
+      <el-form v-else ref="editFormRef" :model="detailForm" :rules="rules" label-position="top">
+        <el-form-item label="自习室名称" prop="roomName">
+          <el-input v-if="isEditing" v-model="detailForm.roomName" placeholder="请输入名称" clearable />
+          <span v-else class="readonly-text">{{ detailForm.roomName }}</span>
+        </el-form-item>
+        
+        <el-form-item label="位置" prop="location">
+          <el-input v-if="isEditing" v-model="detailForm.location" placeholder="请输入位置" clearable />
+          <span v-else class="readonly-text">{{ detailForm.location }}</span>
+        </el-form-item>
+
+        <el-form-item label="容量" prop="capacity">
+          <el-input-number v-if="isEditing" v-model="detailForm.capacity" :min="1" class="w-full" />
+          <span v-else class="readonly-text">{{ detailForm.capacity }} 人</span>
+        </el-form-item>
+
+        <el-form-item label="状态" prop="status">
+          <el-select v-if="isEditing" v-model="detailForm.status" class="w-full">
+            <el-option label="开放中" value="open" />
+            <el-option label="已关闭" value="closed" />
+          </el-select>
+          <div v-else class="readonly-text status-display">
+            <span :class="['status-dot', detailForm.status === 'open' ? 'dot-open' : 'dot-closed']"></span>
+            <span :class="['status-text', detailForm.status === 'open' ? 'text-open' : 'text-closed']">
+              {{ detailForm.status === 'open' ? '开放中' : '已关闭' }}
+            </span>
+          </div>
+        </el-form-item>
+      </el-form>
+      
+      <template #footer>
+        <div class="dialog-footer detail-actions">
+          <div class="left-actions">
+            <el-button v-if="!isEditing" type="danger" plain @click="handleDeleteRoom">删除</el-button>
+          </div>
+          <div class="right-actions">
+            <template v-if="!isEditing">
+              <el-button @click="detailDialogVisible = false">关闭</el-button>
+              <el-button type="primary" @click="isEditing = true">修改</el-button>
+            </template>
+            <template v-else>
+              <el-button @click="cancelEdit">取消修改</el-button>
+              <el-button type="primary" :loading="saving" @click="submitEdit">保存</el-button>
+            </template>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -73,7 +158,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Loading, Search } from '@element-plus/icons-vue'
-import { getStudyRooms } from '@/api/room'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { getStudyRooms, getRoomById, createRoom, updateRoom, deleteRoom } from '@/api/room'
 import { getSeatsByRoom } from '@/api/seat'
 
 const router = useRouter()
@@ -113,6 +199,118 @@ const fetchRooms = async () => {
 
 const enterRoom = (roomId) => {
   router.push(`/rooms/${roomId}/seats`)
+}
+
+// ================= [CRUD 状态及方法] =================
+const saving = ref(false)
+const rules = {
+  roomName: [{ required: true, message: '名称不能为空', trigger: 'blur' }],
+  location: [{ required: true, message: '位置不能为空', trigger: 'blur' }],
+  capacity: [
+    { required: true, message: '容量不能为空', trigger: 'blur' },
+    { type: 'number', min: 1, message: '容量需为大于0的整数', trigger: 'blur' }
+  ],
+  status: [{ required: true, message: '状态不能为空', trigger: 'change' }]
+}
+
+// === 新增自习室 ===
+const addDialogVisible = ref(false)
+const addFormRef = ref(null)
+const addForm = ref({ roomName: '', location: '', capacity: 1, status: 'open' })
+
+const openAddDialog = () => {
+  addForm.value = { roomName: '', location: '', capacity: 1, status: 'open' }
+  addDialogVisible.value = true
+}
+
+const submitAdd = async () => {
+  const valid = await addFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  saving.value = true
+  try {
+    await createRoom(addForm.value)
+    ElMessage.success('新增自习室成功')
+    addDialogVisible.value = false
+    fetchRooms()
+  } catch (e) {
+    ElMessage.error(e?.message || '新增失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+// === 详情与编辑自习室 ===
+const detailDialogVisible = ref(false)
+const detailLoading = ref(false)
+const isEditing = ref(false)
+const editFormRef = ref(null)
+const currentRoomId = ref(null)
+
+const originalDetail = ref({})
+const detailForm = ref({ roomName: '', location: '', capacity: 1, status: 'open' })
+
+const openDetailDialog = async (room) => {
+  currentRoomId.value = room.roomId
+  isEditing.value = false
+  detailDialogVisible.value = true
+  detailLoading.value = true
+  try {
+    const data = await getRoomById(currentRoomId.value)
+    originalDetail.value = {
+      roomName: data.roomName || data.name || room.roomName,
+      location: data.location,
+      capacity: data.capacity,
+      status: data.status
+    }
+    detailForm.value = { ...originalDetail.value }
+  } catch (e) {
+    ElMessage.error('加载详情失败')
+    detailDialogVisible.value = false
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+const cancelEdit = () => {
+  detailForm.value = { ...originalDetail.value }
+  isEditing.value = false
+  editFormRef.value?.clearValidate()
+}
+
+const submitEdit = async () => {
+  const valid = await editFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  saving.value = true
+  try {
+    await updateRoom(currentRoomId.value, detailForm.value)
+    ElMessage.success('修改成功')
+    originalDetail.value = { ...detailForm.value }
+    isEditing.value = false
+    fetchRooms()
+  } catch (e) {
+    ElMessage.error(e?.message || '修改失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+// === 删除自习室 ===
+const handleDeleteRoom = () => {
+  ElMessageBox.confirm('确定要删除该自习室吗？此操作不可恢复。', '警告', {
+    confirmButtonText: '确定删除',
+    cancelButtonText: '取消',
+    type: 'warning',
+    confirmButtonClass: 'el-button--danger'
+  }).then(async () => {
+    try {
+      await deleteRoom(currentRoomId.value)
+      ElMessage.success('删除成功')
+      detailDialogVisible.value = false
+      fetchRooms()
+    } catch (e) {
+      ElMessage.error(e?.message || '删除失败')
+    }
+  }).catch(() => {})
 }
 
 onMounted(fetchRooms)
@@ -370,5 +568,59 @@ onMounted(fetchRooms)
     padding: 7px 12px;
     font-size: 13px;
   }
+}
+
+/* 弹窗及辅助类 */
+.w-full {
+  width: 100%;
+}
+
+.readonly-text {
+  font-size: 15px;
+  color: #111;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  height: 32px;
+}
+
+.status-display {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.detail-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.right-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* 覆盖黑底样式按钮 */
+:deep(.el-button--primary) {
+  background-color: #111;
+  border-color: #111;
+}
+:deep(.el-button--primary:hover) {
+  background-color: #333;
+  border-color: #333;
+}
+:deep(.el-button--primary.is-disabled) {
+  background-color: #d1d5db;
+  border-color: #d1d5db;
+}
+:deep(.el-message-box__btns .el-button--primary.el-button--danger) {
+  background-color: #dc2626;
+  border-color: #dc2626;
+}
+:deep(.el-message-box__btns .el-button--primary.el-button--danger:hover) {
+  background-color: #b91c1c;
+  border-color: #b91c1c;
 }
 </style>

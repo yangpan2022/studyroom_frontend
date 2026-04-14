@@ -29,7 +29,15 @@
       <!-- 顶部栏 -->
       <header class="topbar">
         <span class="topbar-title">自习室管理系统</span>
-        <span class="topbar-user">欢迎使用</span>
+        <div class="topbar-right" @click="router.push('/profile')" title="个人信息">
+          <!-- 使用稳定的 src，避免 v-if 切换造成闪烁 -->
+          <img
+            class="topbar-avatar"
+            :src="avatarSrc"
+            alt="头像"
+          />
+          <span class="topbar-user">欢迎使用，{{ currentUser.username || '用户' }}</span>
+        </div>
       </header>
 
       <!-- 内容区域 -->
@@ -42,11 +50,26 @@
 </template>
 
 <script setup>
-import { ref, onMounted, provide } from 'vue'
-import { House, Calendar, Bell, DataLine } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, provide } from 'vue'
+import { useRouter } from 'vue-router'
+import { House, Calendar, Bell, DataLine, Grid } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { getNotificationsByUser } from '@/api/notification'
+import { getCurrentUser, getCurrentUserId } from '@/utils/auth'
 
-const CURRENT_USER_ID = 1
+const router = useRouter()
+
+// 安全读取当前登录用户
+const currentUser = getCurrentUser()
+const userId = getCurrentUserId()
+
+// 稳定的头像地址：根据角色判断
+const avatarSrc = computed(() => {
+  if (currentUser.role === 'student') {
+    return '/avatars/student.png'
+  }
+  return '/avatars/user1.png'
+})
 
 // 未读数（响应式，注入到 Bell 菜单项）
 const unreadCount = ref(0)
@@ -57,8 +80,9 @@ const unreadCount = ref(0)
  * 实现标记已读 / 删除通知后角标即时同步，无需刷新页面。
  */
 const fetchUnread = async () => {
+  if (!userId) return
   try {
-    const data = await getNotificationsByUser(CURRENT_USER_ID)
+    const data = await getNotificationsByUser(userId)
     // 统计 status 为 unread 的通知数量
     unreadCount.value = data.filter(n => n.status === 'unread').length
   } catch {
@@ -67,16 +91,26 @@ const fetchUnread = async () => {
 }
 
 // 向所有子页面提供 fetchUnread，子页面可通过 inject 调用来刷新角标
-provide('fetchUnread', fetchUnread)
+ provide('fetchUnread', fetchUnread)
 
-const menus = [
-  { label: '自习室',   path: '/rooms',         icon: House     },
-  { label: '我的预约', path: '/reservations',   icon: Calendar  },
-  { label: '通知',     path: '/notifications',  icon: Bell,     badge: unreadCount },
-  { label: '数据分析', path: '/analysis',       icon: DataLine  },
-]
+ // 侧边栏菜单（个人信息不放入菜单，只能通过头像入口）
+ const menus = [
+   { label: '自习室',   path: '/rooms',         icon: House    },
+   { label: '座位管理', path: '/seats/manage',   icon: Grid     },
+   { label: '我的预约', path: '/reservations',   icon: Calendar },
+   { label: '通知',     path: '/notifications',  icon: Bell,    badge: unreadCount },
+   { label: '数据分析', path: '/analysis',       icon: DataLine },
+ ]
 
-onMounted(fetchUnread)
+onMounted(() => {
+  // 若未登录（localStorge 中没有用户信息），提示并自动返回登录页
+  if (!currentUser.username) {
+    ElMessage.warning('请先登录')
+    setTimeout(() => router.push('/login'), 1000)
+    return
+  }
+  fetchUnread()
+})
 </script>
 
 <style scoped>
@@ -196,6 +230,45 @@ onMounted(fetchUnread)
   font-size: 15px;
   font-weight: 600;
   color: #111;
+}
+
+/* 右侧用户区域（可点击跳转个人信息） */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 4px 10px 4px 6px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.topbar-right:hover {
+  background: #f3f4f6;
+}
+
+/* 头像图片 */
+.topbar-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+/* 头像占位（无图时显示图标） */
+.topbar-avatar-placeholder {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  border: 1.5px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  flex-shrink: 0;
 }
 
 .topbar-user {

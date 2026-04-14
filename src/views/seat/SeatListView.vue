@@ -105,6 +105,7 @@ import { ElMessage } from 'element-plus'
 import { Loading, ArrowLeft } from '@element-plus/icons-vue'
 import { getSeatsByRoom } from '@/api/seat'
 import { createReservation } from '@/api/reservation'
+import { getCurrentUser, getCurrentUserId } from '@/utils/auth'
 
 const route = useRoute()
 const router = useRouter()
@@ -145,8 +146,17 @@ const openDialog = (seat) => {
   dialogVisible.value = true
 }
 
+// 从 localStorage 安全读取当前登录用户信息
+const currentUser = getCurrentUser()
+const userId = getCurrentUserId() // 兼容 id/userId/user_id 三种字段
+
 // 提交预约
 const submitReservation = async () => {
+  if (!userId) {
+    ElMessage.error('请先登录')
+    router.push('/login')
+    return
+  }
   if (!form.value.startTime || !form.value.endTime) {
     ElMessage.warning('请填写完整的预约时间')
     return
@@ -154,7 +164,7 @@ const submitReservation = async () => {
   submitting.value = true
   try {
     await createReservation({
-      userId: 1,                        // TODO: 替换为实际登录用户 ID
+      userId: userId,
       seatId: selectedSeat.value.seatId,
       startTime: form.value.startTime,
       endTime: form.value.endTime
