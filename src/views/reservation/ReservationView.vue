@@ -25,6 +25,7 @@
           <el-option label="已签退" value="completed" />
           <el-option label="已取消" value="cancelled" />
         </el-select>
+        <button class="add-btn" @click="handleAddReservation">新增预约</button>
       </div>
     </div>
 
@@ -100,6 +101,12 @@
       <el-form v-else ref="editFormRef" :model="detailForm" :rules="rules" label-position="top">
         <el-form-item label="预约编号">
           <span class="readonly-text">{{ detailForm.reservationId }}</span>
+        </el-form-item>
+
+        <el-form-item label="预约用户" v-if="isAdmin">
+          <span class="readonly-text">
+            {{ detailForm.username || (detailForm.userId ? `用户ID: ${detailForm.userId}` : '-') }}
+          </span>
         </el-form-item>
 
         <el-form-item label="自习室">
@@ -184,6 +191,82 @@
       </template>
     </el-dialog>
 
+    <!-- 管理员新增预约弹窗 -->
+    <el-dialog v-model="addDialogVisible" title="代创预约 (管理员)" width="450px" destroy-on-close :close-on-click-modal="false">
+      <el-form ref="addFormRef" :model="addForm" :rules="addRules" label-position="top">
+        <el-form-item label="目标用户" prop="targetUserId">
+          <el-select
+            v-model="addForm.targetUserId"
+            filterable
+            remote
+            reserve-keyword
+            placeholder="请输入用户名或联系方式搜索"
+            :remote-method="fetchUsers"
+            :loading="userSearching"
+            class="w-full"
+          >
+            <el-option
+              v-for="user in userOptions"
+              :key="user.userId"
+              :label="`${user.username} (ID: ${user.userId})`"
+              :value="user.userId"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="自习室" prop="roomId">
+          <el-select v-model="addForm.roomId" placeholder="选择自习室" class="w-full" @change="onRoomChangeForAdd">
+            <el-option
+              v-for="room in roomOptions"
+              :key="room.roomId"
+              :label="room.roomName"
+              :value="room.roomId"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="分配座位" prop="seatId">
+          <el-select v-model="addForm.seatId" placeholder="选择可用座位" class="w-full" :disabled="!addForm.roomId">
+            <el-option
+              v-for="seat in seatOptions"
+              :key="seat.seatId"
+              :label="`座位 ${seat.seatNumber}` + (seat.status !== 'available' ? ' (不可用)' : '')"
+              :value="seat.seatId"
+              :disabled="seat.status !== 'available'"
+            />
+          </el-select>
+        </el-form-item>
+        
+        <el-form-item label="开始时间" prop="startTime">
+          <el-date-picker
+            v-model="addForm.startTime"
+            type="datetime"
+            placeholder="选择开始时间"
+            format="YYYY-MM-DD HH:mm:ss"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            class="w-full"
+          />
+        </el-form-item>
+
+        <el-form-item label="结束时间" prop="endTime">
+          <el-date-picker
+            v-model="addForm.endTime"
+            type="datetime"
+            placeholder="选择结束时间"
+            format="YYYY-MM-DD HH:mm:ss"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            class="w-full"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="addDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="savingAdd" @click="submitAddReservation">确认创建</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -197,10 +280,18 @@ import {
   checkIn,
   checkOut,
   cancelReservation,
-  updateReservation
+  updateReservation,
+  createReservation
 } from '@/api/reservation'
-import { getCurrentUserId } from '@/utils/auth'
+import { getUserPage } from '@/api/user'
+import { getStudyRooms } from '@/api/room'
+import { getSeatsByRoom } from '@/api/seat'
+import { getCurrentUserId, getCurrentUser } from '@/utils/auth'
+import { useRouter } from 'vue-router'
 
+const router = useRouter()
+const currentUser = getCurrentUser()
+const isAdmin = ref(currentUser?.role === 'admin')
 const userId = getCurrentUserId()
 
 const list = ref([])
@@ -260,10 +351,10 @@ const formatTime = (str) => {
 
 // 加载列表
 const fetchList = async () => {
-  if (!userId) return
+  if (!isAdmin.value && !userId) return
   loading.value = true
   try {
-    list.value = await getReservations(userId)
+    list.value = await getReservations(isAdmin.value ? null : userId)
   } catch (e) {
     ElMessage.error('加载预约列表失败')
   } finally {
@@ -279,7 +370,7 @@ const doAction = async (item, fn, successMsg) => {
     ElMessage.success(successMsg)
     fetchList()
   } catch (e) {
-    ElMessage.error('操作失败，请重试')
+    ElMessage.error(e?.message || '操作失败，请重试')
   } finally {
     loadingId.value = null
   }
@@ -381,6 +472,102 @@ const handleCancelReservation = () => {
       ElMessage.error(e?.message || '取消失败')
     }
   }).catch(() => {})
+}
+
+// ================= [新增预约逻辑] =================
+const addDialogVisible = ref(false)
+const savingAdd = ref(false)
+const addFormRef = ref(null)
+const addForm = ref({ targetUserId: '', roomId: '', seatId: '', startTime: '', endTime: '' })
+
+const userOptions = ref([])
+const roomOptions = ref([])
+const seatOptions = ref([])
+const userSearching = ref(false)
+
+const validateAddEnd = (rule, value, callback) => {
+  if (value && addForm.value.startTime && new Date(value) <= new Date(addForm.value.startTime)) {
+    callback(new Error('结束时间必须大于开始时间'))
+  } else {
+    callback()
+  }
+}
+
+const addRules = {
+  targetUserId: [{ required: true, message: '请选择目标用户', trigger: 'change' }],
+  roomId: [{ required: true, message: '请选择自习室', trigger: 'change' }],
+  seatId: [{ required: true, message: '请选择座位', trigger: 'change' }],
+  startTime: [{ required: true, message: '开始时间不能为空', trigger: 'change' }],
+  endTime: [
+    { required: true, message: '结束时间不能为空', trigger: 'change' },
+    { validator: validateAddEnd, trigger: 'change' }
+  ]
+}
+
+const handleAddReservation = () => {
+  if (!isAdmin.value) {
+    router.push('/rooms')
+  } else {
+    addDialogVisible.value = true
+    addForm.value = { targetUserId: '', roomId: '', seatId: '', startTime: '', endTime: '' }
+    fetchUsers('')
+    fetchRooms()
+    seatOptions.value = []
+  }
+}
+
+const fetchUsers = async (query) => {
+  if (!isAdmin.value) return
+  userSearching.value = true
+  try {
+    const res = await getUserPage({ keyword: query, page: 1, pageSize: 50, status: 'active' })
+    userOptions.value = res.records || []
+  } catch (e) {
+    console.error('获取用户列表失败', e)
+  } finally {
+    userSearching.value = false
+  }
+}
+
+const fetchRooms = async () => {
+  try {
+    roomOptions.value = await getStudyRooms()
+  } catch (e) {
+    console.error('获取自习室失败', e)
+  }
+}
+
+const onRoomChangeForAdd = async (roomId) => {
+  addForm.value.seatId = ''
+  seatOptions.value = []
+  if (!roomId) return
+  try {
+    seatOptions.value = await getSeatsByRoom(roomId)
+  } catch (e) {
+    console.error('获取座位失败', e)
+  }
+}
+
+const submitAddReservation = async () => {
+  const valid = await addFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  savingAdd.value = true
+  try {
+    const payload = {
+      userId: addForm.value.targetUserId,
+      seatId: addForm.value.seatId,
+      startTime: toISOLocal(addForm.value.startTime),
+      endTime: toISOLocal(addForm.value.endTime)
+    }
+    await createReservation(payload)
+    ElMessage.success('代创预约成功')
+    addDialogVisible.value = false
+    fetchList()
+  } catch (e) {
+    ElMessage.error(e?.message || '创建预约失败')
+  } finally {
+    savingAdd.value = false
+  }
 }
 
 onMounted(fetchList)
@@ -643,5 +830,22 @@ onMounted(fetchList)
 :deep(.el-message-box__btns .el-button--primary.el-button--danger:hover) {
   background-color: #b91c1c;
   border-color: #b91c1c;
+}
+
+.add-btn {
+  white-space: nowrap;
+  padding: 8px 18px;
+  background: #111;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.add-btn:hover {
+  background: #333;
 }
 </style>

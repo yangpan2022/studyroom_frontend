@@ -105,6 +105,7 @@ import { ElMessage } from 'element-plus'
 import { Loading, ArrowLeft } from '@element-plus/icons-vue'
 import { getSeatsByRoom } from '@/api/seat'
 import { createReservation } from '@/api/reservation'
+import { getUserReservations } from '@/api/user'
 import { getCurrentUser, getCurrentUserId } from '@/utils/auth'
 
 const route = useRoute()
@@ -140,7 +141,26 @@ const fetchSeats = async () => {
 }
 
 // 打开弹窗
-const openDialog = (seat) => {
+const openDialog = async (seat) => {
+  if (currentUser?.role === 'student') {
+    if (!userId) {
+      ElMessage.error('请先登录')
+      router.push('/login')
+      return
+    }
+    try {
+      const list = await getUserReservations(userId)
+      // 检查是否存在活跃的未完成预约
+      const hasActive = list.some(r => r.status === 'reserved' || r.status === 'occupied')
+      if (hasActive) {
+        ElMessage.warning('您当前已有进行中的预约，无法创建新预约')
+        return
+      }
+    } catch (e) {
+      console.warn('校验活跃预约失败', e)
+    }
+  }
+
   selectedSeat.value = seat
   form.value = { startTime: '', endTime: '' }
   dialogVisible.value = true
@@ -173,7 +193,7 @@ const submitReservation = async () => {
     dialogVisible.value = false
     fetchSeats()   // 刷新座位列表
   } catch (e) {
-    ElMessage.error('预约失败，请重试')
+    ElMessage.error(e?.message || '预约失败，请重试')
   } finally {
     submitting.value = false
   }

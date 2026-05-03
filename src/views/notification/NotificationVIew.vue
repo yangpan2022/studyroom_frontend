@@ -3,8 +3,34 @@
 
     <!-- 页面标题 -->
     <div class="page-header">
-      <h1 class="page-title">通知中心</h1>
-      <p class="page-subtitle">查看系统消息与提醒</p>
+      <div class="header-left">
+        <h1 class="page-title">通知中心</h1>
+        <p class="page-subtitle">查看系统消息与提醒</p>
+      </div>
+      <div class="header-right">
+        <el-select v-model="filterType" placeholder="全部通知" clearable style="width: 180px;">
+          <el-option label="全部通知" value="" />
+          <el-option label="预约成功" value="reservation_success" />
+          <el-option label="预约取消" value="reservation_cancelled" />
+          <el-option label="签到成功" value="checkin_success" />
+          <el-option label="即将开始" value="reservation_reminder_start" />
+          <el-option label="即将结束" value="reservation_reminder_end" />
+          <el-option label="预约完成" value="reservation_completed" />
+          <el-option label="自动签退" value="reservation_completed_auto" />
+          <el-option label="自动释放" value="seat_auto_released" />
+          <el-option label="异常占用" value="seat_conflict_warning" />
+          <el-option label="学习提醒" value="study_warning" />
+          <el-option label="系统通知" value="system_notice" />
+        </el-select>
+        <el-switch v-model="onlyUnread" active-text="只看未读" style="margin-left: 12px; margin-right: 12px;" />
+        <button
+          class="btn btn-ghost"
+          :disabled="unreadCount === 0 || processingAll"
+          @click="markAllRead"
+        >
+          {{ processingAll ? '处理中...' : '一键已读' }}
+        </button>
+      </div>
     </div>
 
     <!-- Loading -->
@@ -14,13 +40,16 @@
 
     <!-- 空状态 -->
     <div v-else-if="list.length === 0" class="state-wrap">
-      <el-empty description="暂无通知消息" />
+      <el-empty description="暂无通知" />
+    </div>
+    <div v-else-if="filteredNotifications.length === 0" class="state-wrap">
+      <el-empty description="暂无符合条件的通知" />
     </div>
 
     <!-- 通知列表 -->
     <div v-else class="notif-list">
       <div
-        v-for="item in list"
+        v-for="item in filteredNotifications"
         :key="item.notificationId"
         :class="['notif-item', item.status === 'unread' ? 'notif-unread' : 'notif-read']"
       >
@@ -66,8 +95,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, inject } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import {
   getNotificationsByUser,
@@ -90,30 +119,84 @@ const list = ref([])
 const loading = ref(false)
 const actionId = ref(null)
 
+const filterType = ref('')
+const onlyUnread = ref(false)
+const processingAll = ref(false)
+
+const unreadCount = computed(() => list.value.filter(item => item.status === 'unread').length)
+
+const markAllRead = async () => {
+  const unreadItems = list.value.filter(n => n.status === 'unread')
+  if (unreadItems.length === 0) return
+  
+  try {
+    await ElMessageBox.confirm('确定将所有未读通知标记为已读吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'info'
+    })
+  } catch {
+    return
+  }
+
+  processingAll.value = true
+  try {
+    await Promise.all(unreadItems.map(item => markNotificationRead(item.notificationId)))
+    unreadItems.forEach(item => item.status = 'read')
+    ElMessage.success('已全部标记为已读')
+    fetchUnread()
+  } catch (e) {
+    ElMessage.error('部分或全部标记失败，请重试')
+    fetchList() // 同步最新状态
+  } finally {
+    processingAll.value = false
+  }
+}
+
+const filteredNotifications = computed(() => {
+  let res = list.value
+
+  if (filterType.value) {
+    res = res.filter(item => item.type === filterType.value)
+  }
+
+  if (onlyUnread.value) {
+    res = res.filter(item => item.status === 'unread')
+  }
+
+  return res
+})
+
 // 类型映射
 const TYPE_MAP = {
-  reservation_success:   '预约成功',
-  reservation_cancelled: '预约取消',
-  checkin_success:       '签到成功',
-  reservation_completed: '预约完成',
-  seat_auto_released:    '自动释放',
-  study_warning:         '学习提醒',
-  system_notice:         '系统通知',
-  seat_conflict_warning: '异常占用',
+  reservation_success:        '预约成功',
+  reservation_cancelled:      '预约取消',
+  checkin_success:            '签到成功',
+  reservation_reminder_start: '即将开始',
+  reservation_reminder_end:   '即将结束',
+  reservation_completed:      '预约完成',
+  reservation_completed_auto: '预约完成',   // 自动签退，标签与手动一致
+  seat_auto_released:         '自动释放',
+  study_warning:              '学习提醒',
+  system_notice:              '系统通知',
+  seat_conflict_warning:      '异常占用',
 }
 
 const typeLabel = (type) => TYPE_MAP[type] ?? '系统消息'
 
 // 类型 → 颜色样式映射（背景色 + 文字色）
 const TYPE_STYLE_MAP = {
-  reservation_success:   { background: '#ecfdf5', color: '#22c55e' },
-  reservation_cancelled: { background: '#fef3c7', color: '#92400e' },
-  checkin_success:       { background: '#eff6ff', color: '#3b82f6' },
-  reservation_completed: { background: '#f5f3ff', color: '#8b5cf6' },
-  seat_auto_released:    { background: '#fffbeb', color: '#f59e0b' },
-  study_warning:         { background: '#fef2f2', color: '#ef4444' },
-  system_notice:         { background: '#f8fafc', color: '#64748b' },
-  seat_conflict_warning: { background: '#fff7ed', color: '#ea580c' },
+  reservation_success:        { background: '#ecfdf5', color: '#22c55e' },
+  reservation_cancelled:      { background: '#fef3c7', color: '#92400e' },
+  checkin_success:            { background: '#eff6ff', color: '#3b82f6' },
+  reservation_reminder_start: { background: '#e0e7ff', color: '#4f46e5' },
+  reservation_reminder_end:   { background: '#ffe4e6', color: '#e11d48' },
+  reservation_completed:      { background: '#f5f3ff', color: '#8b5cf6' },
+  reservation_completed_auto: { background: '#f5f3ff', color: '#8b5cf6' },  // 与手动签退一致
+  seat_auto_released:         { background: '#fffbeb', color: '#f59e0b' },
+  study_warning:              { background: '#fef2f2', color: '#ef4444' },
+  system_notice:              { background: '#f8fafc', color: '#64748b' },
+  seat_conflict_warning:      { background: '#fff7ed', color: '#ea580c' },
 }
 
 // 根据 type 返回对应 style 对象，未知类型降级为 system_notice 配色
@@ -176,7 +259,45 @@ const doDelete = async (item) => {
   }
 }
 
-onMounted(fetchList)
+// ──────────── 轮询自动刷新 ────────────
+let pollTimer = null
+
+/**
+ * 静默刷新（不显示 loading），用于轮询。
+ * 对比新旧通知 ID Set，若有新增则弹出提示。
+ */
+const silentRefresh = async () => {
+  if (!userId) return
+  try {
+    const data = await getNotificationsByUser(userId)
+    const sorted = [...data].sort((a, b) => new Date(b.sendTime) - new Date(a.sendTime))
+
+    // 检测新增通知（用 ID Set 对比，准确且高效）
+    const oldIds = new Set(list.value.map(n => n.notificationId))
+    const newItems = sorted.filter(n => !oldIds.has(n.notificationId))
+
+    if (newItems.length > 0) {
+      ElMessage.success(`收到 ${newItems.length} 条新通知`)
+      // 同步侧边栏未读角标
+      fetchUnread()
+    }
+
+    list.value = sorted
+  } catch (_) {
+    // 轮询失败静默忽略，不打扰用户
+  }
+}
+
+onMounted(() => {
+  // 首次进入：带 loading 状态加载
+  fetchList()
+  // 每 3 秒静默刷新一次
+  pollTimer = setInterval(silentRefresh, 3000)
+})
+
+onUnmounted(() => {
+  clearInterval(pollTimer)
+})
 </script>
 
 <style scoped>
@@ -191,6 +312,20 @@ onMounted(fetchList)
   max-width: 800px;
   margin: 0 auto 28px;
   padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.header-left {
+  flex-shrink: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
 }
 
 .page-title {
@@ -345,6 +480,11 @@ onMounted(fetchList)
 
 /* 响应式 */
 @media (max-width: 600px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
   .page-header,
   .notif-list {
     padding: 0 16px;

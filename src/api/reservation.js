@@ -5,7 +5,11 @@ import request from '@/utils/request'
  * GET /reservations?userId=1
  */
 export function getReservations(userId) {
-  return request.get('/reservations', { params: { userId } })
+  const params = {}
+  if (userId) {
+    params.userId = userId
+  }
+  return request.get('/reservations', { params })
 }
 
 /**

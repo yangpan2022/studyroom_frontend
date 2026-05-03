@@ -40,7 +40,7 @@
           <el-form-item prop="password">
             <el-input
               v-model="registerForm.password"
-              placeholder="请输入密码"
+              placeholder="至少 8 位，包含数字/字母/符号至少两种"
               type="password"
               size="large"
               :prefix-icon="Lock"
@@ -57,6 +57,17 @@
               size="large"
               :prefix-icon="Lock"
               show-password
+            />
+          </el-form-item>
+
+          <!-- 联系方式 -->
+          <el-form-item prop="contact">
+            <el-input
+              v-model="registerForm.contact"
+              placeholder="请输入联系方式"
+              size="large"
+              :prefix-icon="Phone"
+              clearable
             />
           </el-form-item>
 
@@ -93,7 +104,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Lock, Loading } from '@element-plus/icons-vue'
+import { User, Lock, Phone, Loading } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 
 const router = useRouter()
@@ -106,11 +117,34 @@ const registerForm = reactive({
   username:        '',
   password:        '',
   confirmPassword: '',
+  contact:         '',
   role:            'student',  // 固定为学生，后端也会强制设置
   status:          'active'
 })
 
-// ===== 确认密码校验器 =====
+// ===== 自定义校验器 =====
+const validatePassword = (rule, value, callback) => {
+  if (!value) {
+    callback(new Error('请输入密码'))
+    return
+  }
+  if (value.length < 8) {
+    callback(new Error('密码长度不能少于 8 位'))
+    return
+  }
+  let types = 0
+  if (/[0-9]/.test(value)) types++
+  if (/[a-z]/.test(value)) types++
+  if (/[A-Z]/.test(value)) types++
+  if (/[^0-9a-zA-Z]/.test(value)) types++
+  
+  if (types < 2) {
+    callback(new Error('密码需包含数字、小写、大写、特殊字符中的至少两种'))
+  } else {
+    callback()
+  }
+}
+
 const validateConfirm = (rule, value, callback) => {
   if (!value) {
     callback(new Error('请再次输入密码'))
@@ -127,16 +161,24 @@ const registerRules = {
     { required: true, message: '请输入用户名', trigger: 'blur' }
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度不能少于 6 位', trigger: 'blur' }
+    { required: true, validator: validatePassword, trigger: 'blur' }
   ],
   confirmPassword: [
+    { required: true, message: '请确认密码', trigger: 'blur' },
     { validator: validateConfirm, trigger: 'blur' }
+  ],
+  contact: [
+    { required: true, message: '请输入联系方式', trigger: 'blur' }
   ]
 }
 
 // ===== 注册逻辑 =====
 const handleRegister = async () => {
+  if (!registerForm.username || !registerForm.password || !registerForm.confirmPassword || !registerForm.contact) {
+    ElMessage.warning('信息缺失，请完整填写所有必填信息')
+    return
+  }
+
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
@@ -146,6 +188,7 @@ const handleRegister = async () => {
     await request.post('/users', {
       username: registerForm.username,
       password: registerForm.password,
+      contact:  registerForm.contact,
       role:     registerForm.role,
       status:   registerForm.status
     })
@@ -213,7 +256,7 @@ const handleRegister = async () => {
 /* 表单卡片 */
 .form-box {
   width: 100%;
-  max-width: 360px;
+  max-width: 400px;
   background: #fff;
   border-radius: 14px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.07);

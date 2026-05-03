@@ -25,8 +25,8 @@
           alt="头像"
         />
         <div class="avatar-info">
-          <span class="avatar-name">{{ currentUser.username || '用户' }}</span>
-          <span class="avatar-role">{{ roleLabel(form.role) }}</span>
+          <span class="avatar-name">{{ userInfo.username || '用户' }}</span>
+          <span class="avatar-role">{{ roleLabel(userInfo.role) }}</span>
         </div>
         <div class="action-group">
           <button class="edit-trigger-btn" @click="openEditDialog">修改个人信息</button>
@@ -40,15 +40,15 @@
       <div class="profile-readonly">
         <div class="info-row">
           <span class="info-label">用户名</span>
-          <span class="info-value">{{ form.username || '-' }}</span>
+          <span class="info-value">{{ userInfo.username || '-' }}</span>
         </div>
         <div class="info-row">
           <span class="info-label">角色</span>
-          <span class="info-value">{{ roleLabel(form.role) || '-' }}</span>
+          <span class="info-value">{{ roleLabel(userInfo.role) || '-' }}</span>
         </div>
         <div class="info-row">
           <span class="info-label">账号状态</span>
-          <span class="info-value">{{ statusLabel(form.status) || '-' }}</span>
+          <span class="info-value">{{ statusLabel(userInfo.status) || '-' }}</span>
         </div>
         <div class="info-row">
           <span class="info-label">密码</span>
@@ -56,7 +56,7 @@
         </div>
         <div class="info-row">
           <span class="info-label">联系方式</span>
-          <span class="info-value">{{ form.contact || '未填写' }}</span>
+          <span class="info-value">{{ userInfo.contact || '未填写' }}</span>
         </div>
       </div>
     </div>
@@ -105,7 +105,7 @@
     <el-dialog
       v-model="passwordDialogVisible"
       title="修改密码"
-      width="400px"
+      width="550px"
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -121,7 +121,15 @@
         </el-form-item>
 
         <el-form-item label="新密码" prop="newPassword">
-          <el-input v-model="passwordForm.newPassword" placeholder="请输入新密码" type="password" show-password clearable />
+          <el-input 
+            v-model="passwordForm.newPassword" 
+            :placeholder="isPasswordFocused ? '' : passwordRuleText" 
+            type="password" 
+            show-password 
+            clearable 
+            @focus="isPasswordFocused = true"
+            @blur="isPasswordFocused = false"
+          />
         </el-form-item>
 
         <el-form-item label="确认新密码" prop="confirmPassword">
@@ -158,8 +166,8 @@ const router = useRouter()
 
 // ===== 退出登录 =====
 const handleLogout = () => {
-  localStorage.removeItem('token')
-  localStorage.removeItem('currentUser')
+  sessionStorage.removeItem('token')
+  sessionStorage.removeItem('currentUser')
   router.replace('/login')
   ElMessage.success('已退出登录')
 }
@@ -173,7 +181,7 @@ const avatarUrl = computed(() => {
 })
 
 // 本地展示数据
-const form = ref({
+const userInfo = ref({
   username: '',
   role:     '',
   status:   '',
@@ -209,6 +217,31 @@ const passwordForm = ref({
   confirmPassword: ''
 })
 
+const isPasswordFocused = ref(false)
+const passwordRuleText = '密码至少8位，且需包含数字、字母大小写或符号中的至少两类'
+
+const validatePasswordStrength = (rule, value, callback) => {
+  if (!value) {
+    callback(new Error('新密码不能为空'))
+    return
+  }
+  if (value.length < 8) {
+    callback(new Error('密码不能少于8位'))
+    return
+  }
+  let types = 0
+  if (/[0-9]/.test(value)) types++
+  if (/[a-z]/.test(value)) types++
+  if (/[A-Z]/.test(value)) types++
+  if (/[^0-9a-zA-Z]/.test(value)) types++
+  
+  if (types < 2) {
+    callback(new Error('需包含数字、小写、大写、符号至少两类'))
+  } else {
+    callback()
+  }
+}
+
 const checkNewPasswordMatch = (rule, value, callback) => {
   if (value === '') {
     callback(new Error('请再次输入新密码'))
@@ -221,7 +254,9 @@ const checkNewPasswordMatch = (rule, value, callback) => {
 
 const passwordRules = {
   oldPassword: [{ required: true, message: '原密码不能为空', trigger: 'blur' }],
-  newPassword: [{ required: true, message: '新密码不能为空', trigger: 'blur' }],
+  newPassword: [
+    { validator: validatePasswordStrength, trigger: 'blur' }
+  ],
   confirmPassword: [{ validator: checkNewPasswordMatch, trigger: 'blur' }]
 }
 
@@ -238,7 +273,7 @@ const fetchUser = async () => {
   loading.value = true
   try {
     const data = await getUserById(userId)
-    form.value = {
+    userInfo.value = {
       username: data.username ?? '',
       role:     data.role     ?? '',
       status:   data.status   ?? '',
@@ -254,9 +289,9 @@ const fetchUser = async () => {
 
 const openEditDialog = () => {
   editForm.value = {
-    username: form.value.username,
-    status: form.value.status,
-    contact: form.value.contact
+    username: userInfo.value.username,
+    status: userInfo.value.status,
+    contact: userInfo.value.contact
   }
   dialogVisible.value = true
 }
@@ -305,19 +340,19 @@ const handleSave = async () => {
 
     await updateUser(userId, payload)
     
-    // 同步更新 localStorage 中的 currentUser
-    const stored = JSON.parse(localStorage.getItem('currentUser') || '{}')
-    stored.username = payload.username
-    stored.status = payload.status
-    if (payload.contact !== undefined) stored.contact = payload.contact
-    localStorage.setItem('currentUser', JSON.stringify(stored))
+    // 方案 A：重新获取更新后的数据
+    await fetchUser()
+
+    // 方案 A 步骤2：重新获取最新的用户信息结构后，同步维护当前的强缓存
+    const stored = JSON.parse(sessionStorage.getItem('currentUser') || '{}')
+    const updated = { ...stored, ...res.data }
     
-    // 此处还可以修改当前的全局 currentUser 响应对象，但为了简化，直接在拉取中刷新
+    // 强制触发响应式依赖
+    userInfo.value = updated
+    sessionStorage.setItem('currentUser', JSON.stringify(updated))
+    
     ElMessage.success('修改成功')
     dialogVisible.value = false
-    
-    // 重新获取展示
-    await fetchUser()
 
   } catch (e) {
     ElMessage.error(e?.message || '保存失败，请稍后重试')

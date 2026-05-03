@@ -59,7 +59,7 @@
         @row-click="openDetailDialog"
         style="width: 100%; cursor: pointer;"
       >
-        <el-table-column prop="seatId" label="座位ID" width="90" />
+        <el-table-column prop="seatId" label="座位ID" width="110" />
 
         <el-table-column prop="seatNumber" label="座位号" min-width="110" />
 
@@ -90,8 +90,8 @@
 
         <el-table-column label="标定状态" min-width="110">
           <template #default="{ row }">
-            <span :class="row.region ? 'calibrated' : 'uncalibrated'">
-              {{ row.region ? '已标定' : '未标定' }}
+            <span :class="row.hasRegion ? 'calibrated' : 'uncalibrated'">
+              {{ row.hasRegion ? '已标定' : '未标定' }}
             </span>
           </template>
         </el-table-column>
@@ -182,8 +182,8 @@
         </el-form-item>
 
         <el-form-item label="标定状态">
-          <span :class="detailForm.region ? 'calibrated' : 'uncalibrated'">
-            {{ detailForm.region ? '已标定' : '未标定' }}
+          <span :class="detailForm.hasRegion ? 'calibrated' : 'uncalibrated'">
+            {{ detailForm.hasRegion ? '已标定' : '未标定' }}
           </span>
         </el-form-item>
       </el-form>
@@ -220,10 +220,17 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Search } from '@element-plus/icons-vue'
-import { getAllSeats, createSeat, updateSeat, deleteSeat } from '@/api/seat'
+import { getAllSeats, createSeat, updateSeat, deleteSeat, getSeatRegion } from '@/api/seat'
 import { getStudyRooms } from '@/api/room'
+import { getCurrentUser } from '@/utils/auth'
 
 const router = useRouter()
+const currentUser = getCurrentUser()
+if (currentUser.role === 'student') {
+  ElMessage.warning('无访问权限')
+  router.replace('/rooms')
+}
+
 const seats = ref([])
 const rooms = ref([])
 const loading = ref(false)
@@ -235,7 +242,8 @@ const selectedRoomId = ref('')
 // =================== 过滤 ===================
 const filteredSeats = computed(() => {
   let res = seats.value
-  if (selectedRoomId.value !== '' && selectedRoomId.value !== null) {
+  // !selectedRoomId.value 兼容清空后的 null / '' / undefined 三种情况
+  if (selectedRoomId.value) {
     res = res.filter(s => s.roomId === selectedRoomId.value)
   }
   if (searchQuery.value.trim()) {
@@ -262,8 +270,22 @@ const fetchAll = async () => {
   loading.value = true
   try {
     const [seatRes, roomRes] = await Promise.all([getAllSeats(), getStudyRooms()])
-    seats.value = Array.isArray(seatRes) ? seatRes : []
+    const rawSeats = Array.isArray(seatRes) ? seatRes : []
     rooms.value = Array.isArray(roomRes) ? roomRes : []
+
+    // 并行查询每个 seat 的标定状态（/seats 列表接口不含 region 字段）
+    const regionResults = await Promise.allSettled(
+      rawSeats.map(s => getSeatRegion(s.seatId))
+    )
+    seats.value = rawSeats.map((s, i) => {
+      const res = regionResults[i]
+      let hasRegion = false
+      if (res.status === 'fulfilled' && res.value) {
+        const r = res.value
+        hasRegion = !!(r.x1 != null && r.y1 != null && r.x2 != null && r.y2 != null)
+      }
+      return { ...s, hasRegion }
+    })
   } catch (e) {
     ElMessage.error('加载数据失败')
   } finally {
@@ -439,11 +461,10 @@ onMounted(fetchAll)
 }
 .add-btn:hover { background: #333; }
 
-/* 表格容器 */
+/* 表格容器 — 去掉左右 padding，让表头灰色铺满卡片边界 */
 .table-wrapper {
   max-width: 1100px;
   margin: 0 auto;
-  padding: 0 24px;
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
@@ -547,11 +568,22 @@ onMounted(fetchAll)
 :deep(.el-table__row:hover > td) {
   background: #f9fafb !important;
 }
-:deep(.el-table th) {
-  background: #fafafa;
+
+/* 表头：铺满 + 加强灰色，禁止折行 */
+:deep(.el-table th.el-table__cell) {
+  background-color: #f5f5f5;
   font-weight: 600;
   color: #374151;
   font-size: 13px;
+  padding-left: 20px;
+  padding-right: 20px;
+  white-space: nowrap;
+}
+
+/* 数据行单元格：保持与表头对齐的左右内边距 */
+:deep(.el-table td.el-table__cell) {
+  padding-left: 20px;
+  padding-right: 20px;
 }
 
 /* 响应式 */

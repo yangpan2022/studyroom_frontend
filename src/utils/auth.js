@@ -1,11 +1,11 @@
 /**
- * 安全读取 localStorage 中的 currentUser。
+ * 安全读取 sessionStorage 中的 currentUser。
  * 兼容 "undefined"（字符串）、null、JSON 损坏等情况。
  * @returns {Object} 用户对象，字段缺失时返回 {}
  */
 export function getCurrentUser() {
   try {
-    const raw = localStorage.getItem('currentUser')
+    const raw = sessionStorage.getItem('currentUser')
     if (!raw || raw === 'undefined' || raw === 'null') return {}
     return JSON.parse(raw) || {}
   } catch {

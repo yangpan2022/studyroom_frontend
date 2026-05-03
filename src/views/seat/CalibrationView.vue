@@ -31,10 +31,23 @@
             @load="onImageLoad"
             alt="摄像头画面"
           />
-          <!-- 视频模式占位 -->
-          <div v-if="mode === 'video'" class="video-placeholder">
-            <el-icon :size="40" color="#9ca3af"><VideoCamera /></el-icon>
-            <p>视频模式即将接入</p>
+          <!-- 视频模式：使用房间绑定的 videoUrl -->
+          <video
+            v-if="mode === 'video' && roomVideoUrl"
+            ref="videoEl"
+            class="bg-img"
+            :src="roomVideoUrl"
+            autoplay
+            muted
+            loop
+            playsinline
+            @loadedmetadata="onVideoLoad"
+          ></video>
+          <!-- 手动展示提示：roomVideoUrl 为空时（房间未配置视频源） -->
+          <div v-if="mode === 'video' && !roomVideoUrl" class="video-no-src">
+            <el-icon :size="36" color="#9ca3af"><VideoCamera /></el-icon>
+            <p style="color:#6b7280;font-size:14px;margin:8px 0 4px">当前房间未配置视频源</p>
+            <p style="color:#9ca3af;font-size:12px;margin:0">请前往「自习室管理」设置视频文件</p>
           </div>
           <!-- Canvas 叠加层 -->
           <canvas
@@ -147,7 +160,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import { getSeatsByRoom } from '@/api/seat'
 import { getSeatRegion, saveSeatRegion, clearSeatRegion } from '@/api/seat'
-import { getStudyRooms } from '@/api/room'
+import { getStudyRooms, getRoomById } from '@/api/room'
 import request from '@/utils/request'
 import testImage from '@/assets/images/test-image.jpeg'
 
@@ -158,7 +171,10 @@ const seatId = Number(route.params.id)
 // ───────── 数据 ─────────
 const seatInfo  = ref({})
 const roomName  = ref('')
+const roomVideoUrl = ref('')   // 从 GET /rooms/{id} 获取的视频路径
 const mode      = ref('image')   // 'image' | 'video'
+const videoEl   = ref(null)   // <video> 元素引用
+// 标定固定用图片；视频模式背景由 roomVideoUrl 驱动
 const imageUrl  = testImage
 
 // 当前标定区域（相对坐标 0~1）
@@ -190,19 +206,62 @@ let startPx    = { x: 0, y: 0 }
 // 当前拖拽终点（像素）
 let endPx      = { x: 0, y: 0 }
 
+// ───────── 视频元数据加载完成 ─────────
+const onVideoLoad = () => {
+  // 视频模式下，canvas 与视频尺寸对齐（视频用 object-fit: contain，offsetWidth/H 准确）
+  if (videoEl.value) {
+    resizeCanvasToEl(videoEl.value)
+    drawAll()
+  }
+}
+
 // ───────── 图片加载完成 → 初始化 canvas ─────────
 const onImageLoad = () => {
   resizeCanvas()
   drawAll()
 }
 
+/**
+ * 统一的 canvas 尺寸同步函数。
+ * getBoundingClientRect 获取媒体实际渲染尺寸，同时计算的偏移
+ * 任 canvas-wrap 居中布局导致的 top/left 偏移。
+ */
 const resizeCanvas = () => {
-  if (!canvas.value || !bgImg.value) return
-  const w = bgImg.value.naturalWidth  || bgImg.value.offsetWidth
-  const h = bgImg.value.naturalHeight || bgImg.value.offsetHeight
-  canvas.value.width  = bgImg.value.offsetWidth
-  canvas.value.height = bgImg.value.offsetHeight
-  ctx = canvas.value.getContext('2d')
+  if (!canvas.value || !bgImg.value || !canvasWrap.value) return
+  const mediaRect = bgImg.value.getBoundingClientRect()
+  const wrapRect  = canvasWrap.value.getBoundingClientRect()
+  const w    = Math.round(mediaRect.width)
+  const h    = Math.round(mediaRect.height)
+  const top  = Math.round(mediaRect.top  - wrapRect.top)
+  const left = Math.round(mediaRect.left - wrapRect.left)
+  if (w > 0 && h > 0) {
+    canvas.value.width  = w
+    canvas.value.height = h
+    canvas.value.style.width  = w    + 'px'
+    canvas.value.style.height = h    + 'px'
+    canvas.value.style.top    = top  + 'px'
+    canvas.value.style.left   = left + 'px'
+    ctx = canvas.value.getContext('2d')
+  }
+}
+
+const resizeCanvasToEl = (el) => {
+  if (!canvas.value || !el || !canvasWrap.value) return
+  const mediaRect = el.getBoundingClientRect()
+  const wrapRect  = canvasWrap.value.getBoundingClientRect()
+  const w    = Math.round(mediaRect.width)
+  const h    = Math.round(mediaRect.height)
+  const top  = Math.round(mediaRect.top  - wrapRect.top)
+  const left = Math.round(mediaRect.left - wrapRect.left)
+  if (w > 0 && h > 0) {
+    canvas.value.width  = w
+    canvas.value.height = h
+    canvas.value.style.width  = w    + 'px'
+    canvas.value.style.height = h    + 'px'
+    canvas.value.style.top    = top  + 'px'
+    canvas.value.style.left   = left + 'px'
+    ctx = canvas.value.getContext('2d')
+  }
 }
 
 // ───────── 坐标转换 ─────────
@@ -373,7 +432,14 @@ const loadData = async () => {
 
     if (foundSeat) {
       seatInfo.value = foundSeat
-      roomName.value = foundRoom?.roomName || ''
+      roomName.value  = foundRoom?.roomName || ''
+      // 从 GET /rooms/{id} 拿 videoUrl，统一驱动标定背景视频
+      if (foundRoom?.roomId) {
+        try {
+          const roomDetail = await getRoomById(foundRoom.roomId)
+          roomVideoUrl.value = roomDetail.videoUrl || ''
+        } catch (_) { /* videoUrl 拿不到时静默降级 */ }
+      }
     }
 
     // 2. 加载当前座位区域
@@ -530,9 +596,10 @@ onUnmounted(() => {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
-  height: 100%;
+  /* 宽高由 JS 通过 canvas.style.width/height 精确设定 */
+  /* 不得用 CSS width:100%;height:100% 覆盖，否则会拉伸 canvas 导致坐标偏移 */
   cursor: crosshair;
+  pointer-events: auto;
 }
 
 .video-placeholder {

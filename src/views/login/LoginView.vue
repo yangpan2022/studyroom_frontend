@@ -121,8 +121,8 @@ const handleLogin = async () => {
 
     // 存储 token 和用户信息（兼容 data.user 和直接返回的平层格式）
     const userInfo = data.user ?? data
-    localStorage.setItem('token', data.token ?? userInfo.token)
-    localStorage.setItem('currentUser', JSON.stringify(userInfo))
+    sessionStorage.setItem('token', data.token ?? userInfo.token)
+    sessionStorage.setItem('currentUser', JSON.stringify(userInfo))
 
     ElMessage.success('登录成功')
 

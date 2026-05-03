@@ -16,7 +16,7 @@
             <el-icon><Search /></el-icon>
           </template>
         </el-input>
-        <button class="add-btn" @click="openAddDialog">新增自习室</button>
+        <button v-if="isAdmin" class="add-btn" @click="openAddDialog">新增自习室</button>
       </div>
     </div>
 
@@ -70,7 +70,7 @@
     </div>
 
     <!-- 新增自习室弹窗 -->
-    <el-dialog v-model="addDialogVisible" title="新增自习室" width="400px" destroy-on-close :close-on-click-modal="false">
+    <el-dialog v-model="addDialogVisible" title="新增自习室" width="440px" destroy-on-close :close-on-click-modal="false">
       <el-form ref="addFormRef" :model="addForm" :rules="rules" label-position="top">
         <el-form-item label="自习室名称" prop="roomName">
           <el-input v-model="addForm.roomName" placeholder="请输入自习室名称" clearable />
@@ -87,6 +87,20 @@
             <el-option label="已关闭" value="closed" />
           </el-select>
         </el-form-item>
+        <!-- 视频源配置 -->
+        <el-form-item label="视频文件">
+          <el-upload
+            action="#"
+            :auto-upload="false"
+            accept="video/mp4"
+            :show-file-list="false"
+            :on-change="(file) => handleVideoChange(file, 'addForm')"
+          >
+            <el-button plain>选择本地视频文件</el-button>
+          </el-upload>
+          <div v-if="addForm.videoUrl" class="video-path-tip">{{ addForm.videoUrl }}</div>
+        </el-form-item>
+
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -130,17 +144,36 @@
             </span>
           </div>
         </el-form-item>
+
+        <!-- 视频源（编辑/只读） -->
+        <el-form-item v-if="isEditing" label="视频文件">
+          <el-upload
+            action="#"
+            :auto-upload="false"
+            accept="video/mp4"
+            :show-file-list="false"
+            :on-change="(file) => handleVideoChange(file, 'detailForm')"
+          >
+            <el-button plain>选择本地视频文件</el-button>
+          </el-upload>
+          <div v-if="detailForm.videoUrl" class="video-path-tip">{{ detailForm.videoUrl }}</div>
+        </el-form-item>
+        <el-form-item v-if="!isEditing && detailForm.videoUrl" label="视频文件">
+          <span class="readonly-text video-path-tip">{{ detailForm.videoUrl }}</span>
+        </el-form-item>
+
+
       </el-form>
       
       <template #footer>
         <div class="dialog-footer detail-actions">
           <div class="left-actions">
-            <el-button v-if="!isEditing" type="danger" plain @click="handleDeleteRoom">删除</el-button>
+            <el-button v-if="isAdmin && !isEditing" type="danger" plain @click="handleDeleteRoom">删除</el-button>
           </div>
           <div class="right-actions">
             <template v-if="!isEditing">
               <el-button @click="detailDialogVisible = false">关闭</el-button>
-              <el-button type="primary" @click="isEditing = true">修改</el-button>
+              <el-button v-if="isAdmin" type="primary" @click="isEditing = true">修改</el-button>
             </template>
             <template v-else>
               <el-button @click="cancelEdit">取消修改</el-button>
@@ -161,7 +194,10 @@ import { Loading, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getStudyRooms, getRoomById, createRoom, updateRoom, deleteRoom } from '@/api/room'
 import { getSeatsByRoom } from '@/api/seat'
+import { getCurrentUser } from '@/utils/auth'
 
+const currentUser = getCurrentUser()
+const isAdmin = ref(currentUser?.role === 'admin')
 const router = useRouter()
 const rooms = ref([])
 const loading = ref(false)
@@ -216,10 +252,26 @@ const rules = {
 // === 新增自习室 ===
 const addDialogVisible = ref(false)
 const addFormRef = ref(null)
-const addForm = ref({ roomName: '', location: '', capacity: 1, status: 'open' })
+
+
+const addForm = ref({ roomName: '', location: '', capacity: 1, status: 'open', videoUrl: '' })
+
+// 处理本地视频文件选择
+const handleVideoChange = (uploadFile, formName) => {
+  if (uploadFile && uploadFile.raw) {
+    const fileName = uploadFile.raw.name
+    // 构建静态目录访问的媒体路径
+    const targetUrl = `/media/videos/${fileName}`
+    if (formName === 'addForm') {
+      addForm.value.videoUrl = targetUrl
+    } else {
+      detailForm.value.videoUrl = targetUrl
+    }
+  }
+}
 
 const openAddDialog = () => {
-  addForm.value = { roomName: '', location: '', capacity: 1, status: 'open' }
+  addForm.value = { roomName: '', location: '', capacity: 1, status: 'open', videoUrl: '' }
   addDialogVisible.value = true
 }
 
@@ -247,7 +299,7 @@ const editFormRef = ref(null)
 const currentRoomId = ref(null)
 
 const originalDetail = ref({})
-const detailForm = ref({ roomName: '', location: '', capacity: 1, status: 'open' })
+const detailForm = ref({ roomName: '', location: '', capacity: 1, status: 'open', videoUrl: '' })
 
 const openDetailDialog = async (room) => {
   currentRoomId.value = room.roomId
@@ -260,7 +312,8 @@ const openDetailDialog = async (room) => {
       roomName: data.roomName || data.name || room.roomName,
       location: data.location,
       capacity: data.capacity,
-      status: data.status
+      status: data.status,
+      videoUrl:  data.videoUrl  || '',
     }
     detailForm.value = { ...originalDetail.value }
   } catch (e) {
@@ -582,6 +635,14 @@ onMounted(fetchRooms)
   display: flex;
   align-items: center;
   height: 32px;
+}
+
+.video-path-tip {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+  word-break: break-all;
+  line-height: 1.4;
 }
 
 .status-display {
